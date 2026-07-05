@@ -211,6 +211,20 @@ class FaceitClient:
     async def get_match_stats(self, match_id: str) -> dict[str, Any]:
         return await self._get(f"/matches/{match_id}/stats")
 
+    async def get_rankings_around_player(
+        self, region: str, player_id: str, limit: int = 40
+    ) -> dict[str, Any]:
+        """Rankings centered on a player — returns same-ELO-neighborhood peers."""
+        return await self._get(
+            f"/rankings/games/{GAME}/regions/{region}/players/{player_id}",
+            params={"limit": limit},
+        )
+
+    async def get_region_rankings(self, region: str, offset: int = 0, limit: int = 50) -> dict[str, Any]:
+        return await self._get(
+            f"/rankings/games/{GAME}/regions/{region}", params={"offset": offset, "limit": limit}
+        )
+
 
 _default_client: FaceitClient | None = None
 

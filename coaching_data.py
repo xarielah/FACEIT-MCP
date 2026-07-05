@@ -102,6 +102,98 @@ DRILL_LIBRARY: dict[str, list[dict[str, str]]] = {
             "resource": "Personal routine + Leetify session tracking",
         },
     ],
+    # --- Leetify-derived (advanced) weaknesses ---
+    "LEETIFY_LOW_OPENING": [
+        {
+            "drill": "Entry / opening-duel practice: prefire common angles + first-contact aim duels",
+            "cadence": "15 min, 3x/week",
+            "why": "{metric}. Winning the first duel swings round economy and numbers; prefire + duel maps train "
+            "exactly the angles you're losing on.",
+            "resource": "Yprac prefire & duel maps, aim_botz first-shot practice",
+        },
+    ],
+    "LEETIFY_LOW_TRADING": [
+        {
+            "drill": "Trade-refrag discipline: stick to trade distance and re-peek instantly when a teammate dies",
+            "cadence": "every competitive session + 1 VOD review/week",
+            "why": "{metric}. Converting a teammate's death into a trade is a positioning/timing habit, not aim — "
+            "review rounds where a teammate died untraded.",
+            "resource": "Leetify round review, in-game demo review",
+        },
+    ],
+    "LEETIFY_POOR_PREAIM": [
+        {
+            "drill": "Crosshair-placement reps: walk maps keeping the dot at head level on every angle",
+            "cadence": "10 min before every session",
+            "why": "{metric}. Lowering preaim degrees means less distance to move on contact — directly cuts reaction "
+            "time and raises HS%.",
+            "resource": "Yprac crosshair-placement maps, aim_botz",
+        },
+    ],
+    "LEETIFY_LOW_UTILITY": [
+        {
+            "drill": "Learn a compact flash/smoke/HE lineup pack for your 3 most-played maps",
+            "cadence": "15 min, 2x/week",
+            "why": "{metric}. Utility is the cheapest rating gain — a few reliable lineups per map lift round impact "
+            "without touching your aim.",
+            "resource": "Yprac utility maps, csgonades-style lineup resources",
+        },
+    ],
+    "LEETIFY_LOW_POSITIONING": [
+        {
+            "drill": "Death review: tag every death as over-peek / bad crossfire / caught-out and fix the top pattern",
+            "cadence": "1-2 matches/week",
+            "why": "{metric}. Positioning is learned by reviewing where you die, not by aiming more — cut the most "
+            "frequent avoidable death.",
+            "resource": "Leetify positioning breakdown, demo review",
+        },
+    ],
+    # --- Peer-relative (percentile) weaknesses ---
+    "PEER_LOW_KD": [
+        {
+            "drill": "Structured aim warmup + review of rounds where you traded poorly",
+            "cadence": "20 min warmup every session",
+            "why": "{metric}. You're low relative to your own level's peers — closing that gap is about consistent "
+            "warmup and cleaner duels, not a mechanics overhaul.",
+            "resource": "aim_botz, HS-only DM, Leetify session tracking",
+        },
+    ],
+    "PEER_LOW_KR": [
+        {
+            "drill": "Impact reps: opening duels, multi-kill setups, and utility to force favorable fights",
+            "cadence": "15 min, 3x/week",
+            "why": "{metric}. Peers at your level get more kills per round — chase impact frags (entries/trades), "
+            "not just end-of-round pickups.",
+            "resource": "Yprac duel maps, prefire configs",
+        },
+    ],
+    "PEER_LOW_HS_PCT": [
+        {
+            "drill": "Head-level crosshair placement + headshot-only deathmatch",
+            "cadence": "15 min before every session",
+            "why": "{metric}. Your headshot rate trails peers at your level — head-height crosshair discipline is the "
+            "fastest fix.",
+            "resource": "aim_botz, HS-only DM servers, Yprac prefire",
+        },
+    ],
+    "PEER_LOW_ADR": [
+        {
+            "drill": "Damage-focused play: trade damage before dying, use HE/utility for chip damage",
+            "cadence": "ongoing",
+            "why": "{metric}. Low damage-per-round vs peers points to dying without contributing — prioritise trading "
+            "damage and utility on every round.",
+            "resource": "Leetify ADR/utility breakdown, demo review",
+        },
+    ],
+    "PEER_LOW_WIN_RATE": [
+        {
+            "drill": "Win-condition focus: comms, mid-round calling, and reviewing losses for decision errors",
+            "cadence": "1-2 loss reviews/week",
+            "why": "{metric}. Below-peer win rate despite playing the same pool means round decisions/teamplay are the "
+            "lever — review losses, not just deaths.",
+            "resource": "Leetify round-by-round, VOD review with a focus on calls",
+        },
+    ],
 }
 
 SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2}
@@ -119,13 +211,19 @@ def build_improvement_plan(diagnostic: dict[str, Any], focus: str | None = None)
     if focus:
         focus_norm = focus.strip().lower()
         keyword_map = {
-            "aim": {"LOW_HS_PERCENT", "LOW_KD"},
-            "hs": {"LOW_HS_PERCENT"},
-            "impact": {"LOW_KR_IMPACT"},
+            "aim": {"LOW_HS_PERCENT", "LOW_KD", "LEETIFY_POOR_PREAIM", "PEER_LOW_HS_PCT", "PEER_LOW_KD"},
+            "hs": {"LOW_HS_PERCENT", "LEETIFY_POOR_PREAIM", "PEER_LOW_HS_PCT"},
+            "impact": {"LOW_KR_IMPACT", "PEER_LOW_KR", "PEER_LOW_ADR"},
+            "opening": {"LEETIFY_LOW_OPENING"},
+            "entry": {"LEETIFY_LOW_OPENING"},
+            "trading": {"LEETIFY_LOW_TRADING"},
+            "trade": {"LEETIFY_LOW_TRADING"},
+            "utility": {"LEETIFY_LOW_UTILITY"},
+            "positioning": {"LEETIFY_LOW_POSITIONING"},
             "map": {"WEAK_MAP"},
             "maps": {"WEAK_MAP"},
-            "teamplay": {"WINRATE_KD_MISMATCH"},
-            "team": {"WINRATE_KD_MISMATCH"},
+            "teamplay": {"WINRATE_KD_MISMATCH", "LEETIFY_LOW_TRADING", "PEER_LOW_WIN_RATE"},
+            "team": {"WINRATE_KD_MISMATCH", "LEETIFY_LOW_TRADING", "PEER_LOW_WIN_RATE"},
             "tilt": {"TILT_LOSS_STREAK", "DECLINING_FORM", "INCONSISTENT_FORM"},
             "form": {"DECLINING_FORM", "INCONSISTENT_FORM"},
         }

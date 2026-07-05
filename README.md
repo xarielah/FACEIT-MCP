@@ -6,8 +6,8 @@ personalized, data-backed improvement pathway. It's designed to deploy to **Rend
 added as a **remote connector in Claude** on the first try.
 
 The server is **read-only** — it only reads public FACEIT data. There is intentionally **no auth
-wall** on the MCP endpoint (see [Adding auth later](#adding-auth-later)); your FACEIT API key stays
-server-side and is never exposed to the connected client.
+wall** on the MCP endpoint (see [Enabling real OAuth later](#enabling-real-oauth-later--advanced--needs-persistent-storage));
+your FACEIT API key stays server-side and is never exposed to the connected client.
 
 ---
 
@@ -17,20 +17,40 @@ server-side and is never exposed to the connected client.
 
 | Tool | What it does |
 | --- | --- |
-| `search_faceit_player(query)` | Resolve a nickname / profile URL / `player_id` / SteamID64 → identity + level + ELO. |
+| `search_faceit_player(query)` | Resolve a nickname / profile URL / `player_id` / SteamID64 → identity + level + ELO. Returns a `candidates` list when a nickname is ambiguous. |
 | `get_player_overview(query)` | Profile + lifetime stats + active bans. |
 | `get_map_performance(query)` | Per-map win rate / K-D, best & worst maps (maps with <10 matches ignored). |
 | `get_recent_form(query, limit=10)` | Recent matches + per-match stats, trend, streak, consistency. |
-| `analyze_player(query)` | **Headline tool** — full diagnostic: strengths, weaknesses (with severity), map insights, form, overall assessment. |
-| `get_improvement_plan(query, focus=None)` | Weaknesses → prioritized drills/resources tied to the player's own numbers. `focus` can be `aim`, `maps`, `teamplay`, `tilt`, etc. |
+| `benchmark_player(query)` | **Percentile verdicts** for K/D, K/R, HS%, ADR, Win Rate vs same-level, same-region peers (e.g. "bottom-quartile ADR for level 8"). Live peer sampling, with a labelled static-baseline fallback. |
+| `get_advanced_stats(query)` | **Leetify** advanced metrics FACEIT doesn't expose — opening-duel %, trade %, utility damage, preaim, reaction time, aim/positioning/utility ratings. Degrades cleanly if the player has no Leetify profile. Carries required attribution. |
+| `analyze_player(query)` | **Headline tool** — full diagnostic fusing FACEIT stats + peer benchmarks + Leetify signals: strengths, weaknesses (with severity), map/form insights, overall assessment. Reports progress while it fetches. |
+| `get_improvement_plan(query, focus=None)` | Weaknesses → prioritized drills/resources tied to the player's own numbers and percentiles. `focus` can be `aim`, `opening`, `trading`, `utility`, `positioning`, `maps`, `teamplay`, `tilt`. |
+| `set_my_profile(query)` / `whoami()` / `clear_my_profile()` | Lightweight per-user identity: say "I'm `<nick>`" once and later tools default to you. Best-effort in-memory; every tool still accepts an explicit `query`. |
 
-**Prompt**
+**Prompts** — `coach_me(query)`, `pre_match_prep(query, map=None)`, `post_loss_review(query)`, `weekly_review(query)`.
 
-- `coach_me(query)` — primes a full coaching conversation (analyze → explain weak spots → training plan).
+**Resource** — `faceit://player/{query}/analysis` exposes the latest computed analysis (served from
+an in-memory TTL cache, recomputed on demand — stateless-safe).
 
 `query` in every tool accepts a **nickname**, a **profile URL** (`faceit.com/en/players/<nick>`), a
-raw **`player_id`** (UUID), or a **SteamID64**. An exact-nickname miss falls back to FACEIT search
-and resolves the closest match.
+raw **`player_id`** (UUID), or a **SteamID64**. An exact-nickname miss falls back to FACEIT search;
+an ambiguous nickname resolves to the best match and returns the alternatives so Claude can confirm.
+
+### How the advanced features work
+
+- **Peer benchmarking (no DB).** For the target's region + skill level, the server samples ~40 peers
+  from the FACEIT rankings, fetches their lifetime stats concurrently (throttled), and computes the
+  target's percentile per metric. The distribution is cached in-memory per `(region, level)` for 6h.
+  If sampling is rate-limited or too thin, it falls back to an **approximate static baseline** table
+  (in `benchmarks.py`) and clearly labels the output `source: "baseline"`.
+- **Leetify bridge.** A FACEIT player's `game_player_id` **is their SteamID64**, and Leetify's public
+  profile endpoint (`GET /v3/profile?steam64_id=`) is keyed by SteamID64. So the chain is
+  nickname → FACEIT player → Steam64 → Leetify profile. Many players aren't on Leetify; the analysis
+  degrades cleanly to FACEIT-only and notes that connecting Leetify would deepen the report.
+- **Leetify attribution (required).** Any output containing Leetify-derived data includes
+  **"Data Provided by Leetify"** and a **View on Leetify** link
+  (`https://leetify.com/app/profile/{steam64}`). This project is not affiliated with or sponsored by
+  Leetify.
 
 ---
 
@@ -76,6 +96,8 @@ This repo ships a Render **Blueprint** (`render.yaml`):
    web service named `faceit-cs2-mcp`.
 3. In the service's **Environment** settings, set **`FACEIT_API_KEY`** to your Server-Side key
    (it's marked `sync: false`, so Render won't read it from the file — set it manually).
+   Optionally set **`LEETIFY_API_KEY`** for higher Leetify rate limits (the server works without it).
+   `ENABLE_FACEIT_OAUTH` and `ENABLE_ELICITATION` default to `"false"` — leave them.
 4. Deploy. Render's health probe hits `/health`; once it's green the service is live at
    `https://<your-service>.onrender.com`.
 
@@ -111,21 +133,43 @@ accepts `/mcp/`.)
 
 ---
 
-## Adding auth later
+## Per-user personalization
 
-Auth is intentionally **off** for the first deploy — a broken bearer/OAuth handshake is the #1
-reason a remote MCP connector silently fails to attach. The server is read-only, so the endpoint is
-left open. When you're ready to lock it down, there's a commented `TokenVerifier` stub at the top of
-[`server.py`](server.py):
+Two layers, both infra-free:
 
-```python
-from fastmcp.server.auth import TokenVerifier
-auth_provider = TokenVerifier(...)
-mcp = FastMCP("faceit-cs2-coach", auth=auth_provider)
-```
+- **Now (default, no auth, no DB):** `set_my_profile("<nick>")` remembers who you are for the
+  conversation, so `analyze_player()` etc. default to you. It's stored in-memory keyed by MCP session
+  and is **best-effort** — under `stateless_http=True` there isn't always a stable session id, so
+  every tool also accepts an explicit `query`. That explicit argument is the real guarantee: nothing
+  breaks across cold starts. FACEIT's public API + Leetify's public API already cover the full
+  coaching surface, so this gives a personalized experience with zero auth.
 
-Wire the token/issuer through Render env vars and only enable it **after** confirming the connector
-works without auth.
+- **Later (real OAuth, disabled):** see the next section.
+
+## Enabling real OAuth later (advanced — needs persistent storage)
+
+A full FACEIT OAuth provider is scaffolded in [`auth_faceit.py`](auth_faceit.py) using FastMCP's
+`OAuthProxy` against FACEIT's real OIDC endpoints, gated behind `ENABLE_FACEIT_OAUTH` (default
+`false`). When false, the server runs open and connects to Claude first-try. **Do not enable it for a
+normal deploy.** Two caveats you must understand first:
+
+1. **Claude.ai DCR issue.** Claude.ai remote connectors have a reported Dynamic Client Registration
+   (DCR) `400` failure against FastMCP's `OAuthProxy`. Enabling OAuth may break the connection — test
+   in the **MCP Inspector** first, not directly in Claude.
+2. **In-memory token storage is not production-usable.** The scaffold leaves `client_storage=None`, so
+   OAuth client registrations and tokens live in memory and **do not survive a restart / cold start**.
+   Making this production-grade requires a **persistent, encrypted store** (a DB/Redis implementing
+   `AsyncKeyValue`), which is deliberately out of scope for this infra-free build. The injection point
+   is marked in `auth_faceit.py`.
+
+To experiment: set `ENABLE_FACEIT_OAUTH=true`, `MCP_JWT_SECRET`, `FACEIT_OAUTH_CLIENT_ID`,
+`FACEIT_OAUTH_CLIENT_SECRET`, and register `https://<service>.onrender.com/auth/callback` as the
+redirect URI in your FACEIT OAuth app.
+
+> Similarly, `ENABLE_ELICITATION` (default `false`) turns on protocol-level `ctx.elicit` prompts.
+> It's off because that request/response round-trip is unreliable under `stateless_http` and can hang
+> a tool. With it off, ambiguous nicknames resolve to the best match and return a `candidates` list
+> for Claude to disambiguate in conversation.
 
 ---
 
@@ -134,8 +178,10 @@ works without auth.
 - FastMCP 3.x standalone package (`from fastmcp import FastMCP`); the MCP endpoint mounts at `/mcp`.
 - FACEIT stat fields are treated as strings and parsed defensively (missing fields tolerated).
 - Skill-level ELO bands follow FACEIT's published CS2 table; maps need ≥10 matches to count toward
-  best/worst; a ≥3-game active loss streak flags tilt risk. These thresholds live in
-  [`analysis.py`](analysis.py) and are easy to tune.
+  best/worst; a ≥3-game active loss streak flags tilt risk. **Peer benchmarking** samples ~40 peers
+  and caches distributions 6h; the static baseline table is approximate. These thresholds/tables live
+  in [`analysis.py`](analysis.py) and [`benchmarks.py`](benchmarks.py) and are easy to tune.
+- Leetify field names/paths were confirmed against the live OpenAPI spec at build time.
 
 ---
 
@@ -146,5 +192,6 @@ pip install pytest
 python -m pytest tests/ -v
 ```
 
-Unit tests cover the pure analysis engine (parsing, level bands, fragging/aim/mismatch detection,
-map ranking, form/tilt, and an end-to-end diagnostic) — no network needed.
+Unit tests (no network) cover the pure analysis engine (parsing, level bands, fragging/aim/mismatch,
+map ranking, form/tilt, end-to-end diagnostic), the **benchmarking percentile math** + static
+baseline, and the **Leetify fusion** (weakness detection, attribution, graceful absence).

@@ -244,6 +244,151 @@ def infer_role(hs_pct: float, kr: float, lifetime: dict[str, Any]) -> str:
 
 
 # ----------------------------------------------------------------------
+# Leetify fusion (advanced metrics, Phase 4)
+# ----------------------------------------------------------------------
+
+LEETIFY_ATTRIBUTION = "Data Provided by Leetify"
+
+
+def analyze_leetify(leetify_profile: dict[str, Any] | None, steam64: str | None = None) -> dict[str, Any]:
+    """Interpret a Leetify profile into advanced signals + strengths/weaknesses.
+
+    Returns {"available": False, ...} when no profile is present so callers can
+    degrade cleanly to FACEIT-only analysis. Any available output carries the
+    required Leetify attribution + profile link.
+    """
+    profile_url = f"https://leetify.com/app/profile/{steam64}" if steam64 else None
+
+    if not leetify_profile:
+        return {
+            "available": False,
+            "steam64": steam64,
+            "profile_url": profile_url,
+            "note": "No Leetify profile found for this player (they may never have uploaded). "
+            "Connecting Leetify would add opening-duel, trade, utility, preaim and positioning insight.",
+            "strengths": [],
+            "weaknesses": [],
+        }
+
+    ranks = leetify_profile.get("ranks") or {}
+    rating = leetify_profile.get("rating") or {}
+    stats = leetify_profile.get("stats") or {}
+
+    ct_open = safe_float(stats.get("ct_opening_duel_success_percentage"))
+    t_open = safe_float(stats.get("t_opening_duel_success_percentage"))
+    open_vals = [v for v in (ct_open, t_open) if v > 0]
+    opening_pct = sum(open_vals) / len(open_vals) if open_vals else 0.0
+
+    trade_kill_pct = safe_float(stats.get("trade_kills_success_percentage"))
+    traded_death_pct = safe_float(stats.get("traded_deaths_success_percentage"))
+    preaim = safe_float(stats.get("preaim"))
+    reaction_ms = safe_float(stats.get("reaction_time_ms"))
+    he_dmg = safe_float(stats.get("he_foes_damage_avg"))
+    util_on_death = safe_float(stats.get("utility_on_death_avg"))
+    spray_acc = safe_float(stats.get("spray_accuracy"))
+
+    aim_rating = safe_float(rating.get("aim"))
+    positioning_rating = safe_float(rating.get("positioning"))
+    utility_rating = safe_float(rating.get("utility"))
+
+    key_stats = {
+        "leetify_rating": ranks.get("leetify"),
+        "opening_duel_success_pct": round(opening_pct, 1) if opening_pct else None,
+        "trade_kills_success_pct": round(trade_kill_pct, 1) if trade_kill_pct else None,
+        "traded_deaths_success_pct": round(traded_death_pct, 1) if traded_death_pct else None,
+        "preaim_degrees": round(preaim, 2) if preaim else None,
+        "reaction_time_ms": round(reaction_ms, 0) if reaction_ms else None,
+        "he_foes_damage_avg": round(he_dmg, 1) if he_dmg else None,
+        "spray_accuracy": round(spray_acc, 3) if spray_acc else None,
+    }
+    ratings = {
+        "aim": round(aim_rating, 1) if aim_rating else None,
+        "positioning": round(positioning_rating, 1) if positioning_rating else None,
+        "utility": round(utility_rating, 1) if utility_rating else None,
+    }
+
+    strengths: list[dict[str, Any]] = []
+    weaknesses: list[dict[str, Any]] = []
+
+    # Opening duels
+    if opening_pct and opening_pct < 45:
+        weaknesses.append(
+            {
+                "code": "LEETIFY_LOW_OPENING",
+                "severity": "medium",
+                "metric": f"Opening-duel success {opening_pct:.0f}% (Leetify)",
+                "summary": "Losing more opening duels than winning — entry timing and aim-duel prep are costing early-round advantage.",
+            }
+        )
+    elif opening_pct >= 55:
+        strengths.append({"code": "LEETIFY_STRONG_OPENING", "summary": f"Wins opening duels ({opening_pct:.0f}%, Leetify)."})
+
+    # Trading
+    if trade_kill_pct and trade_kill_pct < 45:
+        weaknesses.append(
+            {
+                "code": "LEETIFY_LOW_TRADING",
+                "severity": "medium",
+                "metric": f"Trade-kill success {trade_kill_pct:.0f}% (Leetify)",
+                "summary": "Low trade-kill conversion — not punishing when a teammate dies. A trading/refrag discipline issue, not aim.",
+            }
+        )
+
+    # Preaim / crosshair placement (lower degrees = better)
+    if preaim and preaim > 16:
+        weaknesses.append(
+            {
+                "code": "LEETIFY_POOR_PREAIM",
+                "severity": "medium",
+                "metric": f"Preaim {preaim:.1f}° off target (Leetify)",
+                "summary": "Crosshair is far from head level on average — crosshair-placement drilling would cut reaction time and raise HS%.",
+            }
+        )
+    elif preaim and preaim <= 11:
+        strengths.append({"code": "LEETIFY_GOOD_PREAIM", "summary": f"Tight crosshair placement ({preaim:.1f}°, Leetify)."})
+
+    # Utility
+    if utility_rating and utility_rating < 45:
+        weaknesses.append(
+            {
+                "code": "LEETIFY_LOW_UTILITY",
+                "severity": "low",
+                "metric": f"Utility rating {utility_rating:.0f} (Leetify)",
+                "summary": "Below-par utility impact — flash/smoke/HE lineups and timing are an easy point gain.",
+            }
+        )
+    elif utility_rating and utility_rating >= 60:
+        strengths.append({"code": "LEETIFY_STRONG_UTILITY", "summary": f"Strong utility usage (rating {utility_rating:.0f}, Leetify)."})
+
+    # Positioning
+    if positioning_rating and positioning_rating < 45:
+        weaknesses.append(
+            {
+                "code": "LEETIFY_LOW_POSITIONING",
+                "severity": "medium",
+                "metric": f"Positioning rating {positioning_rating:.0f} (Leetify)",
+                "summary": "Weak positioning rating — dying in avoidable spots. Review deaths for over-peeks and bad crossfires.",
+            }
+        )
+    elif positioning_rating and positioning_rating >= 60:
+        strengths.append({"code": "LEETIFY_STRONG_POSITIONING", "summary": f"Good positioning (rating {positioning_rating:.0f}, Leetify)."})
+
+    if aim_rating and aim_rating >= 65:
+        strengths.append({"code": "LEETIFY_STRONG_AIM", "summary": f"Strong aim rating ({aim_rating:.0f}, Leetify)."})
+
+    return {
+        "available": True,
+        "steam64": steam64 or leetify_profile.get("steam64_id"),
+        "profile_url": profile_url,
+        "attribution": LEETIFY_ATTRIBUTION,
+        "ratings": ratings,
+        "key_stats": key_stats,
+        "strengths": strengths,
+        "weaknesses": weaknesses,
+    }
+
+
+# ----------------------------------------------------------------------
 # Assembly
 # ----------------------------------------------------------------------
 
@@ -254,6 +399,8 @@ def build_diagnostic(
     history_items: list[dict[str, Any]],
     recent_match_stats: list[dict[str, Any]],
     bans: list[dict[str, Any]],
+    leetify_profile: dict[str, Any] | None = None,
+    benchmark: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     context = build_context(profile)
     lifetime = stats.get("lifetime") or {}
@@ -265,6 +412,10 @@ def build_diagnostic(
     maps = analyze_maps(segments)
     form = analyze_form(history_items, recent_match_stats, context.get("player_id") or "", lifetime)
     role = infer_role(aim["hs_pct"], fragging["kr"], lifetime)
+
+    cs2 = (profile.get("games") or {}).get("cs2") or {}
+    steam64 = cs2.get("game_player_id")
+    leetify = analyze_leetify(leetify_profile, steam64)
 
     strengths: list[dict[str, Any]] = []
     weaknesses: list[dict[str, Any]] = []
@@ -376,6 +527,15 @@ def build_diagnostic(
             }
         )
 
+    # Fold in Leetify-derived strengths/weaknesses (Phase 4).
+    strengths.extend(leetify.get("strengths", []))
+    weaknesses.extend(leetify.get("weaknesses", []))
+
+    # Fold in relative (peer-percentile) weaknesses (Phase 1).
+    if benchmark:
+        for rel in benchmark.get("relative_weaknesses", []):
+            weaknesses.append(rel)
+
     active_bans = [b for b in (bans or []) if str(b.get("status", "")).lower() not in ("expired", "revoked")]
 
     severity_rank = {"high": 0, "medium": 1, "low": 2}
@@ -383,7 +543,7 @@ def build_diagnostic(
 
     overall_assessment = _build_overall_assessment(context, fragging, aim, mismatch, form)
 
-    return {
+    result = {
         "profile_summary": context,
         "role_lean": role,
         "fragging": fragging,
@@ -391,10 +551,16 @@ def build_diagnostic(
         "map_insights": maps,
         "form": form,
         "bans": active_bans,
+        "benchmark": benchmark,
+        "advanced_stats_leetify": leetify,
         "strengths": strengths,
         "weaknesses": weaknesses,
         "overall_assessment": overall_assessment,
     }
+    if leetify.get("available"):
+        result["attribution"] = LEETIFY_ATTRIBUTION
+        result["leetify_profile_url"] = leetify.get("profile_url")
+    return result
 
 
 def _build_overall_assessment(context, fragging, aim, mismatch, form) -> str:

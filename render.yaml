@@ -7,7 +7,25 @@ services:
     startCommand: python server.py
     healthCheckPath: /health
     envVars:
+      # Required: Server-Side FACEIT app key. Set manually in the dashboard.
       - key: FACEIT_API_KEY
-        sync: false # set manually in the Render dashboard
+        sync: false
+      # Optional: Leetify public API key for higher rate limits (works without it).
+      - key: LEETIFY_API_KEY
+        sync: false
+      # Used ONLY if OAuth is enabled (signs FastMCP-issued JWTs so they survive restarts).
+      - key: MCP_JWT_SECRET
+        sync: false
+      # Keep OAuth OFF for a first-try Claude connection (see README caveats).
+      - key: ENABLE_FACEIT_OAUTH
+        value: "false"
+      # Protocol-level elicitation is unreliable under stateless HTTP; keep OFF.
+      - key: ENABLE_ELICITATION
+        value: "false"
+      # --- FACEIT OAuth app credentials (only needed if ENABLE_FACEIT_OAUTH=true) ---
+      # - key: FACEIT_OAUTH_CLIENT_ID
+      #   sync: false
+      # - key: FACEIT_OAUTH_CLIENT_SECRET
+      #   sync: false
       - key: PYTHON_VERSION
         value: 3.11.9

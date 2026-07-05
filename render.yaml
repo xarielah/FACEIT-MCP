@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: faceit-cs2-mcp
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python server.py
+    healthCheckPath: /health
+    envVars:
+      - key: FACEIT_API_KEY
+        sync: false # set manually in the Render dashboard
+      - key: PYTHON_VERSION
+        value: 3.11.9
